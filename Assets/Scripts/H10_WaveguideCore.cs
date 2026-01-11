@@ -3,263 +3,398 @@ using System;
 
 public class H10_WaveguideCore : MonoBehaviour
 {
-    // Константы
-    public const float SPEED_OF_LIGHT = 299792458f; // м/с
-    public const float VACUUM_IMPEDANCE = 376.73f; // Ом
+    [Header("Параметры волновода")]
+    [SerializeField] private float a = 0.023f;     
+    [SerializeField] private float b = 0.010f;      
+    [SerializeField] private float epsilon = 1.0f;  
+    [SerializeField] private float mu = 1.0f;       
 
-    // === НАСТРАИВАЕМЫЕ ПАРАМЕТРЫ ===
-    [Header("Размеры волновода")]
-    [SerializeField, Range(10f, 100f)]
-    private float _widthMM = 23f;      // Ширина в мм
+    [Header("Параметры сигнала")]
+    [SerializeField] private float frequency = 9.0e9f; 
+    [SerializeField] private float pistonPosition = 0.250f; 
 
-    [SerializeField, Range(5f, 50f)]
-    private float _heightMM = 10f;     // Высота в мм
+    [Header("Режим работы")]
+    [SerializeField] private bool isStandingWaveMode = false; 
 
-    [Header("Материал заполнения")]
-    [SerializeField, Range(1f, 10f)]
-    private float _epsilon = 1f;       // ε
+    [Header("Расчётные параметры")]
+    public float lambda0_mm;        
+    private float lambda0;          
+    private float lambda_w;         
+    private float fc;             
+    private float v_phase;         
+    private float waveAngularFrequency; 
 
-    [Header("Генератор")]
-    [SerializeField, Range(1f, 20f)]
-    private float _frequencyGHz = 9f;  // Частота в ГГц
+    [Header("Настройки анимации")]
+    public float timeScale = 1.0f; 
 
-    // === РАССЧИТАННЫЕ ПАРАМЕТРЫ ===
-    [Header("Рассчитанные параметры")]
-    [ReadOnly] public float a;                // Ширина в метрах
-    [ReadOnly] public float b;                // Высота в метрах
-    [ReadOnly] public float lambda0_mm;       // λ₀ в вакууме, мм
-    [ReadOnly] public float lambda_crit_mm;   // λ_кр для H10, мм
-    [ReadOnly] public float fc_GHz;           // f_кр, ГГц
-    [ReadOnly] public float lambda_waveguide_mm; // λ_в, мм
-    [ReadOnly] public bool isPropagating;     // Распространяется ли волна?
-    [ReadOnly] public float v_phase;          // Фазовая скорость, м/с
-
-    // Атрибут для полей только для чтения
-    public class ReadOnlyAttribute : PropertyAttribute { }
-
-    // Событие при изменении параметров
     public event Action OnParametersChanged;
 
     void Start()
     {
-        CalculateAll();
-        Debug.Log($"Старт: a={_widthMM}мм, ε={_epsilon}, f={_frequencyGHz}ГГц, fкр={fc_GHz:F3}ГГц");
+        RecalculateParameters();
+        Debug.Log("H10_WaveguideCore: Инициализирован");
     }
 
     void Update()
     {
-        // Можно добавить автообновление, если нужно
+
     }
 
-    void OnValidate()
+    // === ОСНОВНЫЕ РАСЧЁТЫ ===
+
+    void RecalculateParameters()
     {
-        CalculateAll();
-    }
+        float c = 3.0e8f; 
 
-    // Основной метод расчета
-    void CalculateAll()
-    {
-        // 1. Конвертируем мм в метры
-        a = _widthMM * 0.001f;
-        b = _heightMM * 0.001f;
-
-        // 2. Проверяем a > b
-        if (a <= b) a = b + 0.001f;
-
-        // 3. Основные длины волн
-        float frequencyHz = _frequencyGHz * 1e9f;
-        float lambda0 = SPEED_OF_LIGHT / frequencyHz;
+        lambda0 = c / frequency;
         lambda0_mm = lambda0 * 1000f;
 
-        float lambda = lambda0 / Mathf.Sqrt(_epsilon);
+        fc = c / (2.0f * a * Mathf.Sqrt(epsilon * mu));
 
-        // 4. КРИТИЧЕСКИЕ ПАРАМЕТРЫ ДЛЯ H10
-        lambda_crit_mm = 2f * a * 1000f;  // λ_кр = 2a, в мм
+        float lambda_crit = 2.0f * a * Mathf.Sqrt(epsilon * mu);
 
-        float fc_Hz = SPEED_OF_LIGHT / (2f * a * Mathf.Sqrt(_epsilon));
-        fc_GHz = fc_Hz / 1e9f;  // в ГГц
-
-        // 5. Проверка условия распространения
-        isPropagating = frequencyHz > fc_Hz;
-
-        // 6. Длина волны в волноводе
-        if (isPropagating)
+        if (frequency > fc)
         {
-            float ratio = lambda / (2f * a);
-            lambda_waveguide_mm = (lambda / Mathf.Sqrt(1f - ratio * ratio)) * 1000f;
+            lambda_w = lambda0 / Mathf.Sqrt(epsilon * mu - Mathf.Pow(lambda0 / (2.0f * a), 2));
 
-            // 7. Фазовая скорость
-            v_phase = SPEED_OF_LIGHT / (Mathf.Sqrt(_epsilon) * Mathf.Sqrt(1f - ratio * ratio));
+            v_phase = c / Mathf.Sqrt(epsilon * mu - Mathf.Pow(lambda0 / (2.0f * a), 2));
         }
         else
         {
-            lambda_waveguide_mm = 0f;
-            v_phase = 0f;
+            lambda_w = 0;
+            v_phase = 0;
         }
 
-        // Оповещаем подписчиков
+        waveAngularFrequency = 2.0f * Mathf.PI * frequency;
+
         OnParametersChanged?.Invoke();
     }
 
-    // === ПУБЛИЧНЫЕ МЕТОДЫ ДЛЯ ИЗМЕНЕНИЯ ПАРАМЕТРОВ ===
+    // === МЕТОДЫ ДЛЯ ЭЛЕКТРИЧЕСКОГО ПОЛЯ ===
+
+    public Vector3 GetElectricFieldAt(Vector3 position, float time)
+    {
+        if (!IsPropagating())
+            return Vector3.zero;
+
+        float x = position.x + a / 2f;
+        float z = position.z;
+
+        float scaledTime = time * timeScale;
+        float phase = (scaledTime * waveAngularFrequency) % (2 * Mathf.PI);
+
+        float amplitude = 1.0f;
+        float beta = 2.0f * Mathf.PI / lambda_w;
+
+        if (isStandingWaveMode)
+        {
+            float Ey = 2.0f * amplitude * (2.0f * a / lambda0) *
+                       Mathf.Sin(Mathf.PI * x / a) *
+                       Mathf.Sin(beta * z) * Mathf.Cos(phase);
+            return new Vector3(0, Ey, 0);
+        }
+        else
+        {
+            float Ey = amplitude * (2.0f * a / lambda0) *
+                       Mathf.Sin(Mathf.PI * x / a) *
+                       Mathf.Sin(phase - beta * z);
+            return new Vector3(0, Ey, 0);
+        }
+    }
+
+    // === НОВЫЕ МЕТОДЫ ДЛЯ МАГНИТНОГО ПОЛЯ ===
+
+    public Vector3 GetMagneticFieldAt(Vector3 position, float time)
+    {
+        if (!IsPropagating())
+            return Vector3.zero;
+
+        if (isStandingWaveMode)
+        {
+            return GetStandingWaveMagneticFieldAt(position, time);
+        }
+        else
+        {
+            return GetTravelingWaveMagneticFieldAt(position, time);
+        }
+    }
+
+    public Vector3 GetTravelingWaveMagneticFieldAt(Vector3 position, float time)
+    {
+        if (!IsPropagating())
+            return Vector3.zero;
+
+        float x = position.x + a / 2f;
+        float z = position.z;
+
+        float scaledTime = time * timeScale;
+        float phase = (scaledTime * waveAngularFrequency) % (2 * Mathf.PI);
+
+        float amplitude = 1.0f;
+        float beta = 2.0f * Mathf.PI / lambda_w;
+
+        float Hz = amplitude * Mathf.Cos(Mathf.PI * x / a) *
+                   Mathf.Cos(phase - beta * z);
+
+        float Hx = -amplitude * (2.0f * a / lambda0) *
+                   Mathf.Sin(Mathf.PI * x / a) *
+                   Mathf.Sin(phase - beta * z);
+
+        return new Vector3(Hx, 0, Hz);
+    }
+
+    public Vector3 GetStandingWaveMagneticFieldAt(Vector3 position, float time)
+    {
+        if (!IsPropagating())
+            return Vector3.zero;
+
+        float x = position.x + a / 2f;
+        float z = position.z;
+
+        float scaledTime = time * timeScale;
+        float phase = (scaledTime * waveAngularFrequency) % (2 * Mathf.PI); 
+
+        float beta = 2.0f * Mathf.PI / lambda_w;
+        float amplitude = 1.0f;
+
+        float Hz = 2.0f * amplitude * Mathf.Cos(Mathf.PI * x / a) *
+                   Mathf.Sin(beta * z) * Mathf.Sin(phase); 
+
+        float Hx = -2.0f * amplitude * (2.0f * a / lambda0) *
+                   Mathf.Sin(Mathf.PI * x / a) *
+                   Mathf.Cos(beta * z) * Mathf.Sin(phase); 
+
+        return new Vector3(Hx, 0, Hz);
+    }
+
+    // === ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ===
+
+    public bool IsPropagating()
+    {
+        return frequency > fc;
+    }
+
+    public float GetCriticalFrequencyGHz()
+    {
+        return fc / 1e9f;
+    }
+
+    public float GetCriticalWavelengthMM()
+    {
+        return (2.0f * a * Mathf.Sqrt(epsilon * mu)) * 1000f;
+    }
+
+    public float GetWaveguideWavelengthMM()
+    {
+        return IsPropagating() ? lambda_w * 1000f : 0f;
+    }
+
+    public float GetPhaseVelocity()
+    {
+        return v_phase;
+    }
+
+    public float GetWidthMM()
+    {
+        return a * 1000f;
+    }
+
+    public float GetHeightMM()
+    {
+        return b * 1000f;
+    }
+
+    public float GetEpsilon()
+    {
+        return epsilon;
+    }
+
+    public float GetFrequencyGHz()
+    {
+        return frequency / 1e9f;
+    }
+
+    public float GetA()
+    {
+        return a;
+    }
+
+    // === МЕТОДЫ ДЛЯ ИЗМЕНЕНИЯ ПАРАМЕТРОВ ===
 
     public void SetWidth(float widthMM)
     {
-        _widthMM = Mathf.Clamp(widthMM, 10f, 100f);
-        CalculateAll();
-        Debug.Log($"Ширина установлена: {_widthMM}мм");
+        a = Mathf.Clamp(widthMM, 10f, 100f) * 0.001f; 
+        RecalculateParameters();
     }
 
     public void SetHeight(float heightMM)
     {
-        _heightMM = Mathf.Clamp(heightMM, 5f, 50f);
-        CalculateAll();
-        Debug.Log($"Высота установлена: {_heightMM}мм");
+        b = Mathf.Clamp(heightMM, 5f, 50f) * 0.001f; 
+        RecalculateParameters();
     }
 
-    public void SetEpsilon(float epsilon)
+    public void SetWaveguideSize(float widthMM, float heightMM)
     {
-        _epsilon = Mathf.Clamp(epsilon, 1f, 10f);
-        CalculateAll();
-        Debug.Log($"ε установлен: {_epsilon}");
+        a = Mathf.Clamp(widthMM, 10f, 100f) * 0.001f;
+        b = Mathf.Clamp(heightMM, 5f, 50f) * 0.001f;
+        RecalculateParameters();
+    }
+
+    public void SetEpsilon(float eps)
+    {
+        epsilon = Mathf.Clamp(eps, 1f, 10f);
+        RecalculateParameters();
     }
 
     public void SetFrequency(float freqGHz)
     {
-        _frequencyGHz = Mathf.Clamp(freqGHz, 1f, 20f);
-        CalculateAll();
-        Debug.Log($"Частота установлена: {_frequencyGHz}ГГц");
+        frequency = Mathf.Clamp(freqGHz, 1f, 20f) * 1e9f; 
+        RecalculateParameters();
     }
-
-    // === ГЕТТЕРЫ ДЛЯ UI ===
-
-    public float GetWidthMM() => _widthMM;
-    public float GetHeightMM() => _heightMM;
-    public float GetEpsilon() => _epsilon;
-    public float GetFrequencyGHz() => _frequencyGHz;
-    public float GetCriticalFrequencyGHz() => fc_GHz;
-    public float GetCriticalWavelengthMM() => lambda_crit_mm;
-    public bool IsPropagating() => isPropagating;
-    public float GetWaveguideWavelengthMM() => lambda_waveguide_mm;
-    public float GetPhaseVelocity() => v_phase;
-
-    [Header("Дополнительные параметры")]
-    [SerializeField, Range(0f, 300f)]
-    private float _pistonPositionMM = 0f; // Положение поршня в мм
-
-    [SerializeField]
-    private float _sourcePower = 1f;      // Мощность источника
-
-    [SerializeField]
-    private OperationMode _mode = OperationMode.StandingWave;
-
-    public enum OperationMode { TravellingWave, StandingWave }
-
-    public float GetA() => a;  // Ширина в метрах
-    public float GetB() => b;  // Высота в метрах
 
     public void SetPistonPosition(float positionMM)
     {
-        _pistonPositionMM = Mathf.Clamp(positionMM, 0f, 300f);
-        CalculateAll();
-        Debug.Log($"Поршень установлен: {_pistonPositionMM} мм");
+        float oldPosition = pistonPosition;
+        pistonPosition = Mathf.Clamp(positionMM, 0f, 300f) * 0.001f; 
+        RecalculateParameters();
     }
 
-    public float GetPistonPositionMM() => _pistonPositionMM;
-
-    public void SetOperationMode(OperationMode mode)
+    public void SetWaveMode(bool standingWave)
     {
-        _mode = mode;
-        CalculateAll();
-        Debug.Log($"Режим установлен: {mode}");
+        isStandingWaveMode = standingWave;
+        Debug.Log($"Режим волны изменен: {(standingWave ? "Стоячая" : "Бегущая")}");
     }
 
-    public void SetSourcePower(float power)
+    public void SetPistonClosed(bool isClosed)
     {
-        _sourcePower = Mathf.Clamp(power, 0.1f, 10f);
-        CalculateAll();
-    }
-
-    // Функция для расчета электрического поля в точке
-    public Vector3 GetElectricFieldAt(Vector3 point, float time)
-    {
-        if (!isPropagating)
-            return Vector3.zero;
-
-        float x = point.x;  // Поперечная координата (м)
-        float z = point.z;  // Продольная координата (м)
-        float omega = 2f * Mathf.PI * _frequencyGHz * 1e9f; // Угловая частота
-
-        // Амплитудные коэффициенты
-        float beta = 2f * Mathf.PI / (lambda_waveguide_mm * 0.001f); // Постоянная распространения
-        float E0 = Mathf.Sqrt(_sourcePower * VACUUM_IMPEDANCE); // Примерная амплитуда
-
-        Vector3 field = Vector3.zero;
-
-        if (_mode == OperationMode.TravellingWave)
+        isStandingWaveMode = isClosed;
+        if (isClosed)
         {
-            // Бегущая волна
-            field.y = E0 * Mathf.Sin(Mathf.PI * x / a) *
-                      Mathf.Sin(omega * time - beta * z);
+            Debug.Log("Поршень закрыт - режим стоячей волны");
         }
         else
         {
-            // Стоячая волна (с учетом поршня)
-            float effectiveZ = z - (_pistonPositionMM * 0.001f);
-            field.y = 2f * E0 * Mathf.Sin(Mathf.PI * x / a) *
-                      Mathf.Sin(beta * effectiveZ) *
-                      Mathf.Cos(omega * time);
+            Debug.Log("Поршень открыт - режим бегущей волны");
         }
-
-        return field;
     }
 
-    // Функция для расчета магнитного поля в точке
-    public Vector3 GetMagneticFieldAt(Vector3 point, float time)
+    // === МЕТОДЫ ДЛЯ ДОМАШНЕГО ЗАДАНИЯ ===
+
+    public float CalculateAttenuation(float sigma, float tanDelta)
     {
-        if (!isPropagating)
-            return Vector3.zero;
+        if (!IsPropagating()) return 0f;
 
-        float x = point.x;
-        float z = point.z;
-        float omega = 2f * Mathf.PI * _frequencyGHz * 1e9f;
-        float beta = 2f * Mathf.PI / (lambda_waveguide_mm * 0.001f);
-        float H0 = E0 / VACUUM_IMPEDANCE;
+        float alpha_met = (1.0f / b) *
+                          Mathf.Sqrt(Mathf.PI * Mathf.Sqrt(epsilon) /
+                          (377.0f * lambda0 * sigma)) *
+                          (1.0f + (2.0f * b / a) * Mathf.Pow(lambda0 / (2.0f * a), 2)) /
+                          Mathf.Sqrt(1.0f - Mathf.Pow(lambda0 / (2.0f * a), 2));
 
-        Vector3 field = Vector3.zero;
+        float alpha_diel = (Mathf.PI / lambda0) *
+                           (tanDelta / Mathf.Sqrt(1.0f - Mathf.Pow(lambda0 / (2.0f * a), 2)));
 
-        if (_mode == OperationMode.TravellingWave)
+        float alpha_np = alpha_met + alpha_diel;
+
+        float alpha_db = 8.686f * alpha_np;
+
+        return alpha_db;
+    }
+
+    public float CalculateCharacteristicImpedance()
+    {
+        if (!IsPropagating()) return 0f;
+
+        float Z_H10 = (377.0f * Mathf.Sqrt(mu / epsilon)) /
+                      Mathf.Sqrt(1.0f - Mathf.Pow(lambda0 / (2.0f * a), 2));
+
+        return Z_H10;
+    }
+
+    // === МЕТОДЫ ДЛЯ ТЕСТИРОВАНИЯ ===
+
+    public void PrintDebugInfo()
+    {
+        Debug.Log("=== ПАРАМЕТРЫ ВОЛНОВОДА ===");
+        Debug.Log($"Размеры: {a * 1000:F1}×{b * 1000:F1} мм");
+        Debug.Log($"ε = {epsilon:F2}, μ = {mu:F2}");
+        Debug.Log($"Частота: {frequency / 1e9:F2} ГГц");
+        Debug.Log($"λ₀: {lambda0 * 1000:F1} мм");
+        Debug.Log($"λ_кр: {2 * a * 1000:F1} мм");
+        Debug.Log($"f_кр: {fc / 1e9:F3} ГГц");
+        Debug.Log($"Распространение: {(IsPropagating() ? "ДА" : "НЕТ")}");
+
+        if (IsPropagating())
         {
-            field.x = -H0 * (lambda_waveguide_mm * 0.001f / (2f * a)) *
-                      Mathf.Sin(Mathf.PI * x / a) *
-                      Mathf.Sin(omega * time - beta * z);
+            Debug.Log($"λ_в: {lambda_w * 1000:F1} мм");
+            Debug.Log($"V_фаз: {v_phase / 1e6:F0} Мм/с");
+            Debug.Log($"Z_H10: {CalculateCharacteristicImpedance():F1} Ом");
+        }
 
-            field.z = H0 * Mathf.Cos(Mathf.PI * x / a) *
-                      Mathf.Cos(omega * time - beta * z);
+        Debug.Log($"Режим: {(isStandingWaveMode ? "Стоячая волна" : "Бегущая волна")}");
+        Debug.Log($"Позиция поршня: {pistonPosition * 1000:F1} мм");
+    }
+
+    // === МЕТОДЫ ДЛЯ ЭКСПЕРИМЕНТАЛЬНОЙ ЧАСТИ ===
+
+    public float MeasureFieldAtProbe(Vector3 probePosition, bool isElectricField, float time)
+    {
+        if (!IsPropagating()) return 0f;
+
+        if (isElectricField)
+        {
+            Vector3 eField = GetElectricFieldAt(probePosition, time);
+            return eField.magnitude;
         }
         else
         {
-            float effectiveZ = z - (_pistonPositionMM * 0.001f);
-            field.x = -2f * H0 * (lambda_waveguide_mm * 0.001f / (2f * a)) *
-                      Mathf.Sin(Mathf.PI * x / a) *
-                      Mathf.Cos(beta * effectiveZ) *
-                      Mathf.Sin(omega * time);
+            Vector3 hField = GetMagneticFieldAt(probePosition, time);
+            return hField.magnitude;
+        }
+    }
 
-            field.z = 2f * H0 * Mathf.Cos(Mathf.PI * x / a) *
-                      Mathf.Sin(beta * effectiveZ) *
-                      Mathf.Sin(omega * time);
+    public float[] GetFieldDistributionX(bool isElectricField, float fixedZ, float time)
+    {
+        int points = 50;
+        float[] distribution = new float[points];
+
+        for (int i = 0; i < points; i++)
+        {
+            float x = (-a / 2f) + (i / (float)points) * a;
+            Vector3 position = new Vector3(x, 0, fixedZ);
+
+            if (isElectricField)
+            {
+                distribution[i] = GetElectricFieldAt(position, time).magnitude;
+            }
+            else
+            {
+                distribution[i] = GetMagneticFieldAt(position, time).magnitude;
+            }
         }
 
-        return field;
+        return distribution;
     }
 
-    // Метод для изменения размера волновода (удобная обертка)
-    public void SetWaveguideSize(float widthMM, float heightMM)
+    public float[] GetFieldDistributionZ(bool isElectricField, float fixedX, float time)
     {
-        SetWidth(widthMM);
-        SetHeight(heightMM);
-    }
+        int points = 100;
+        float[] distribution = new float[points];
 
-    // Вспомогательное свойство
-    private float E0 => Mathf.Sqrt(_sourcePower * VACUUM_IMPEDANCE);
+        for (int i = 0; i < points; i++)
+        {
+            float z = (i / (float)points) * pistonPosition;
+            Vector3 position = new Vector3(fixedX, 0, z);
+
+            if (isElectricField)
+            {
+                distribution[i] = GetElectricFieldAt(position, time).magnitude;
+            }
+            else
+            {
+                distribution[i] = GetMagneticFieldAt(position, time).magnitude;
+            }
+        }
+
+        return distribution;
+    }
 }

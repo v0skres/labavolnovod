@@ -16,16 +16,28 @@ public class LabSetupController : MonoBehaviour
     public Material probeHMaterial;
 
     [Header("Настройки движения")]
-    public float pistonSpeed = 10f;    // мм/сек
-    public float probeMoveSpeed = 5f;  // мм/сек
+    public float pistonSpeed = 10f;    
+    public float probeMoveSpeed = 5f; 
+
+    [Header("Настройки анимации датчиков")]
+    public float probeMoveSmoothTime = 0.1f; 
+    public bool useSmoothMovement = true;    
 
     [Header("Пределы движения")]
-    public float pistonMinZ = 0f;      // Минимальная позиция поршня (мм)
-    public float pistonMaxZ = 300f;    // Максимальная позиция поршня (мм)
-    public float probeMinX = -11.5f;   // Минимальная X позиция датчика (мм)
-    public float probeMaxX = 11.5f;    // Максимальная X позиция датчика (мм)
-    public float probeMinZ = 0f;       // Минимальная Z позиция датчика (мм)
-    public float probeMaxZ = 300f;     // Максимальная Z позиция датчика (мм)
+    public float pistonMinZ = 0f;    
+    public float pistonMaxZ = 300f;  
+    public float probeMinX = -11.5f;   
+    public float probeMaxX = 11.5f;  
+    public float probeMinZ = 0f;      
+    public float probeMaxZ = 300f;     
+
+    [Header("Настройки датчика H")]
+    public float probeHPosXMM = 0f;
+    public float probeHPosZMM = 150f;
+    public KeyCode probeHLeftKey = KeyCode.J;
+    public KeyCode probeHRightKey = KeyCode.L;
+    public KeyCode probeHUpKey = KeyCode.I;
+    public KeyCode probeHDownKey = KeyCode.K;
 
     [Header("Ссылка на ядро расчета")]
     public H10_WaveguideCore waveguideCore;
@@ -33,35 +45,53 @@ public class LabSetupController : MonoBehaviour
     [Header("UI для измерений")]
     public Text measurementText;
     public Slider measurementSlider;
+    public Text probeHMeasurementText;
+    public Slider probeHMeasurementSlider;
 
     [Header("Начальные позиции")]
     [SerializeField] private float pistonStartPositionMM = 250f;
 
-    // Текущие позиции в миллиметрах
-    private float pistonPositionMM = 0f;
-    private float probeEPosXMM = 0f;
-    private float probeEPosZMM = 150f; // Начальная позиция по центру
+    [Header("Ссылка на усилитель")]
+    public MeasuringAmplifier measuringAmplifier;
+
+    [Header("Дисплеи позиций")]
+    public TextMesh pistonDisplay;       
+    public TextMesh probeEDisplay;       
+    public TextMesh probeHDisplay;     
+
+    [Header("Настройки отображения")]
+    public bool showPositionsInMM = true; 
+    public string pistonFormat = "Поршень: {0:F1} мм";
+    public string probeEFormat = "E: x={0:F1} мм, z={1:F1} мм";
+    public string probeHFormat = "H: x={0:F1} мм, z={1:F1} мм";
+
+    public float pistonPositionMM = 0f;
+    public float probeEPosXMM = 0f;
+    public float probeEPosZMM = 150f; 
     private Vector3 pistonWorldStartPos;
     private Vector3 probeEWorldStartPos;
     private Vector3 probeHWorldStartPos;
 
-    // Для визуализации поля
+    private Vector3 probeETargetPosition;
+    private Vector3 probeHTargetPosition;
+    private Vector3 probeEVelocity = Vector3.zero;
+    private Vector3 probeHVelocity = Vector3.zero;
+
     private LineRenderer fieldLineRenderer;
+    private LineRenderer magneticFieldLineRenderer;
 
     void Start()
     {
-        // Инициализация позиций
         pistonPositionMM = pistonStartPositionMM;
         pistonPositionMM = Mathf.Clamp(pistonPositionMM, pistonMinZ, pistonMaxZ);
         probeEPosXMM = Mathf.Clamp(probeEPosXMM, probeMinX, probeMaxX);
         probeEPosZMM = Mathf.Clamp(probeEPosZMM, probeMinZ, probeMaxZ);
+        probeHPosXMM = Mathf.Clamp(probeHPosXMM, probeMinX, probeMaxX);
+        probeHPosZMM = Mathf.Clamp(probeHPosZMM, probeMinZ, probeMaxZ);
 
         if (piston != null)
         {
-            // Сохраняем мировую стартовую позицию
             pistonWorldStartPos = piston.position;
-            // Вычисляем текущее смещение в мм
-            // Предполагаем движение вдоль оси Z мира
             pistonPositionMM = (piston.position.z - pistonWorldStartPos.z) * 1000f;
         }
 
@@ -71,55 +101,225 @@ public class LabSetupController : MonoBehaviour
         if (probeH != null)
             probeHWorldStartPos = probeH.position;
 
-        // Инициализация позиций из текущего положения
         if (probeE != null)
         {
-            // Для датчика E берем мировую позицию и преобразуем в мм
-            // Предполагаем, что движение по X и Z происходит в мировых координатах
             probeEPosXMM = (probeE.position.x - probeEWorldStartPos.x) * 1000f;
             probeEPosZMM = (probeE.position.z - probeEWorldStartPos.z) * 1000f;
-
             probeEPosXMM = Mathf.Clamp(probeEPosXMM, probeMinX, probeMaxX);
             probeEPosZMM = Mathf.Clamp(probeEPosZMM, probeMinZ, probeMaxZ);
         }
 
-        // Применяем начальные позиции
-        //UpdatePistonPosition();
-        //UpdateProbePosition();
+        if (probeH != null)
+        {
+            probeHPosXMM = (probeH.position.x - probeHWorldStartPos.x) * 1000f;
+            probeHPosZMM = (probeH.position.z - probeHWorldStartPos.z) * 1000f;
+            probeHPosXMM = Mathf.Clamp(probeHPosXMM, probeMinX, probeMaxX);
+            probeHPosZMM = Mathf.Clamp(probeHPosZMM, probeMinZ, probeMaxZ);
+        }
 
-        // Создаем LineRenderer для визуализации поля
-        CreateFieldVisualizer();
+        probeETargetPosition = CalculateProbeEPosition();
+        probeHTargetPosition = CalculateProbeHPosition();
 
-        // Применяем материалы
+        if (probeE != null)
+        {
+            probeE.position = probeETargetPosition;
+            Debug.Log($"Датчик E: начальная позиция = {probeE.position}");
+        }
+        if (probeH != null)
+        {
+            probeH.position = probeHTargetPosition;
+            Debug.Log($"Датчик H: начальная позиция = {probeH.position}");
+        }
+
+        CreateFieldVisualizers();
+
         ApplyMaterials();
 
-        Debug.Log("LabSetupController: Инициализирован");
+        UpdatePistonPosition();
+
+        Debug.Log("LabSetupController: Инициализация завершена");
+        Debug.Log($"Начальные позиции: E(x={probeEPosXMM:F1}мм, z={probeEPosZMM:F1}мм), " +
+                 $"H(x={probeHPosXMM:F1}мм, z={probeHPosZMM:F1}мм)");
+
+        InitializeDisplays();
     }
 
     void Update()
     {
-        // Обработка управления
         HandleControls();
 
-        // Визуализация поля
-        VisualizeField();
+        UpdateProbePositionsSmoothly();
 
-        // Обновляем UI измерений
+        VisualizeFields();
+
         UpdateMeasurementUI();
+
+        if (measuringAmplifier != null && measuringAmplifier.isOn)
+        {
+            UpdateProbeMeasurementInAmplifier();
+        }
+
+        UpdatePositionDisplays();
     }
 
-    void CreateFieldVisualizer()
+    void InitializeDisplays()
     {
-        GameObject lineObj = new GameObject("FieldLines");
-        lineObj.transform.SetParent(transform);
-        fieldLineRenderer = lineObj.AddComponent<LineRenderer>();
+        CreateDisplaysIfNeeded();
+
+        UpdatePositionDisplays();
+    }
+
+    void CreateDisplaysIfNeeded()
+    {
+        if (pistonDisplay == null && piston != null)
+        {
+            pistonDisplay = CreateDisplay("PistonDisplay", piston);
+            pistonDisplay.transform.localPosition = new Vector3(0, 0.02f, 0); 
+        }
+
+        if (probeEDisplay == null && probeE != null)
+        {
+            probeEDisplay = CreateDisplay("ProbeEDisplay", probeE);
+            probeEDisplay.transform.localPosition = new Vector3(0, 0.03f, 0); 
+            probeEDisplay.color = Color.red;
+        }
+
+        if (probeHDisplay == null && probeH != null)
+        {
+            probeHDisplay = CreateDisplay("ProbeHDisplay", probeH);
+            probeHDisplay.transform.localPosition = new Vector3(0, 0.03f, 0); 
+            probeHDisplay.color = Color.blue;
+        }
+    }
+
+    TextMesh CreateDisplay(string name, Transform parent)
+    {
+        GameObject displayObj = new GameObject(name);
+        displayObj.transform.SetParent(parent);
+        displayObj.transform.localPosition = Vector3.zero;
+        displayObj.transform.localRotation = Quaternion.identity;
+
+        TextMesh textMesh = displayObj.AddComponent<TextMesh>();
+        textMesh.fontSize = 20;
+        textMesh.characterSize = 0.01f;
+        textMesh.anchor = TextAnchor.MiddleCenter;
+        textMesh.alignment = TextAlignment.Center;
+
+        return textMesh;
+    }
+
+    void UpdatePositionDisplays()
+    {
+        if (pistonDisplay != null)
+        {
+            pistonDisplay.text = string.Format(pistonFormat, pistonPositionMM);
+            pistonDisplay.gameObject.SetActive(waveguideCore != null && waveguideCore.IsPropagating());
+        }
+
+        if (probeEDisplay != null)
+        {
+            probeEDisplay.text = string.Format(probeEFormat, probeEPosXMM, probeEPosZMM);
+        }
+
+        if (probeHDisplay != null)
+        {
+            probeHDisplay.text = string.Format(probeHFormat, probeHPosXMM, probeHPosZMM);
+        }
+    }
+
+    void UpdateProbeMeasurementInAmplifier()
+    {
+        if (measuringAmplifier == null) return;
+    }
+
+    void UpdateProbePositionsSmoothly()
+    {
+        if (useSmoothMovement)
+        {
+            if (probeE != null)
+            {
+                probeETargetPosition = CalculateProbeEPosition();
+                probeE.position = Vector3.SmoothDamp(
+                    probeE.position,
+                    probeETargetPosition,
+                    ref probeEVelocity,
+                    probeMoveSmoothTime
+                );
+            }
+
+            if (probeH != null)
+            {
+                probeHTargetPosition = CalculateProbeHPosition();
+                probeH.position = Vector3.SmoothDamp(
+                    probeH.position,
+                    probeHTargetPosition,
+                    ref probeHVelocity,
+                    probeMoveSmoothTime
+                );
+            }
+        }
+        else
+        {
+            UpdateProbeEPosition();
+            UpdateProbeHPosition();
+        }
+    }
+
+    Vector3 CalculateProbeEPosition()
+    {
+        Vector3 newWorldPos = probeEWorldStartPos;
+        newWorldPos.x += probeEPosXMM * 0.001f; 
+        newWorldPos.z += probeEPosZMM * 0.001f; 
+        return newWorldPos;
+    }
+
+    Vector3 CalculateProbeHPosition()
+    {
+        Vector3 newWorldPos = probeHWorldStartPos;
+        newWorldPos.x += probeHPosXMM * 0.001f; 
+        newWorldPos.z += probeHPosZMM * 0.001f; 
+        return newWorldPos;
+    }
+
+    void UpdateProbeEPosition()
+    {
+        if (probeE != null)
+        {
+            probeE.position = CalculateProbeEPosition();
+        }
+    }
+
+    void UpdateProbeHPosition()
+    {
+        if (probeH != null)
+        {
+            probeH.position = CalculateProbeHPosition();
+        }
+    }
+
+    void CreateFieldVisualizers()
+    {
+        GameObject eFieldLineObj = new GameObject("ElectricFieldLines");
+        eFieldLineObj.transform.SetParent(transform);
+        fieldLineRenderer = eFieldLineObj.AddComponent<LineRenderer>();
         fieldLineRenderer.startWidth = 0.002f;
         fieldLineRenderer.endWidth = 0.002f;
         fieldLineRenderer.material = new Material(Shader.Find("Sprites/Default"));
         fieldLineRenderer.startColor = Color.red;
-        fieldLineRenderer.endColor = Color.blue;
+        fieldLineRenderer.endColor = Color.red;
         fieldLineRenderer.positionCount = 0;
-        fieldLineRenderer.useWorldSpace = false; // Важно: используем локальные координаты
+        fieldLineRenderer.useWorldSpace = false;
+
+        GameObject hFieldLineObj = new GameObject("MagneticFieldLines");
+        hFieldLineObj.transform.SetParent(transform);
+        magneticFieldLineRenderer = hFieldLineObj.AddComponent<LineRenderer>();
+        magneticFieldLineRenderer.startWidth = 0.002f;
+        magneticFieldLineRenderer.endWidth = 0.002f;
+        magneticFieldLineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        magneticFieldLineRenderer.startColor = Color.blue;
+        magneticFieldLineRenderer.endColor = Color.blue;
+        magneticFieldLineRenderer.positionCount = 0;
+        magneticFieldLineRenderer.useWorldSpace = false;
     }
 
     void ApplyMaterials()
@@ -141,13 +341,10 @@ public class LabSetupController : MonoBehaviour
 
     void HandleControls()
     {
-        // Управление поршнем
         HandlePistonControl();
 
-        // Управление датчиком E
-        HandleProbeControl();
+        HandleProbeEControl();
 
-        // Управление датчиком H (если нужно)
         HandleProbeHControl();
     }
 
@@ -161,31 +358,33 @@ public class LabSetupController : MonoBehaviour
 
         if (Mathf.Abs(moveInput) > 0.1f)
         {
+            float oldPosition = pistonPositionMM;
             pistonPositionMM += moveInput * pistonSpeed * Time.deltaTime;
             pistonPositionMM = Mathf.Clamp(pistonPositionMM, pistonMinZ, pistonMaxZ);
 
-            // Обновляем позицию поршня
             UpdatePistonPosition();
 
-            // Обновляем в ядре расчета
-            waveguideCore.SetPistonPosition(pistonPositionMM);
+            if (Mathf.Abs(oldPosition - pistonPositionMM) > 0.01f)
+            {
+                waveguideCore.SetPistonPosition(pistonPositionMM);
 
-            Debug.Log($"Поршень: {pistonPositionMM:F1} мм");
+                Debug.Log($"LabSetupController: Поршень: {pistonPositionMM:F1} мм " +
+                         $"(Δ={(pistonPositionMM - oldPosition):F2} мм, " +
+                         $"клавиша: {(moveInput > 0 ? "Вперёд" : "Назад")})");
+            }
         }
     }
 
-    void UpdatePistonPosition()
+    public void UpdatePistonPosition()
     {
         if (piston == null) return;
 
-        // Двигаем в мировых координатах вдоль оси Z
         Vector3 newWorldPos = pistonWorldStartPos;
-        newWorldPos.z += pistonPositionMM * 0.001f; // Добавляем смещение в метрах
-
+        newWorldPos.z += pistonPositionMM * 0.001f;
         piston.position = newWorldPos;
     }
 
-    void HandleProbeControl()
+    void HandleProbeEControl()
     {
         if (probeE == null || waveguideCore == null) return;
 
@@ -197,47 +396,39 @@ public class LabSetupController : MonoBehaviour
 
         if (Mathf.Abs(moveX) > 0.1f || Mathf.Abs(moveZ) > 0.1f)
         {
+            float oldX = probeEPosXMM;
+            float oldZ = probeEPosZMM;
+
             probeEPosXMM += moveX * probeMoveSpeed * Time.deltaTime;
             probeEPosZMM += moveZ * probeMoveSpeed * Time.deltaTime;
 
-            // Ограничиваем движение внутри волновода
             probeEPosXMM = Mathf.Clamp(probeEPosXMM, probeMinX, probeMaxX);
             probeEPosZMM = Mathf.Clamp(probeEPosZMM, probeMinZ, probeMaxZ);
 
-            // Обновляем позицию датчика
-            UpdateProbeEPosition();
+            probeETargetPosition = CalculateProbeEPosition();
 
-            // Обновляем измерение
-            UpdateProbeMeasurement();
+            if (!useSmoothMovement)
+            {
+                UpdateProbeEPosition();
+            }
+
+            UpdateProbeEMeasurement();
+
+            Debug.Log($"Датчик E: X {oldX:F1}→{probeEPosXMM:F1} мм, " +
+                     $"Z {oldZ:F1}→{probeEPosZMM:F1} мм, " +
+                     $"ΔX={moveX}, ΔZ={moveZ}");
+
+            if (measuringAmplifier != null && measuringAmplifier.isElectricProbe)
+            {
+                measuringAmplifier.UpdateMeasurementFromWaveguide();
+            }
         }
     }
 
-    void HandleProbeHControl()
-    {
-        // Аналогично для датчика H при необходимости
-        // Можно использовать другие клавиши
-    }
-
-    void UpdateProbeEPosition()
-    {
-        if (probeE == null) return;
-
-        // Используем мировые координаты как с поршнем
-        Vector3 newWorldPos = probeEWorldStartPos;
-
-        // Двигаем по мировым осям X и Z
-        newWorldPos.x += probeEPosXMM * 0.001f; // мм → м
-        newWorldPos.z += probeEPosZMM * 0.001f; // мм → м
-                                                // Y оставляем как было изначально
-
-        probeE.position = newWorldPos;
-    }
-
-    void UpdateProbeMeasurement()
+    void UpdateProbeEMeasurement()
     {
         if (waveguideCore == null || probeE == null) return;
 
-        // Создаем вектор позиции в метрах
         Vector3 probePos = new Vector3(
             probeEPosXMM * 0.001f,
             0f,
@@ -252,39 +443,121 @@ public class LabSetupController : MonoBehaviour
                  $"E={fieldStrength:F3} В/м");
     }
 
-    void VisualizeField()
+    void HandleProbeHControl()
+    {
+        if (probeH == null || waveguideCore == null) return;
+
+        float moveX = 0f, moveZ = 0f;
+        if (Input.GetKey(probeHLeftKey)) moveX = -1f;
+        if (Input.GetKey(probeHRightKey)) moveX = 1f;
+        if (Input.GetKey(probeHUpKey)) moveZ = 1f;
+        if (Input.GetKey(probeHDownKey)) moveZ = -1f;
+
+        if (Mathf.Abs(moveX) > 0.1f || Mathf.Abs(moveZ) > 0.1f)
+        {
+            float oldX = probeHPosXMM;
+            float oldZ = probeHPosZMM;
+
+            probeHPosXMM += moveX * probeMoveSpeed * Time.deltaTime;
+            probeHPosZMM += moveZ * probeMoveSpeed * Time.deltaTime;
+
+            probeHPosXMM = Mathf.Clamp(probeHPosXMM, probeMinX, probeMaxX);
+            probeHPosZMM = Mathf.Clamp(probeHPosZMM, probeMinZ, probeMaxZ);
+
+            probeHTargetPosition = CalculateProbeHPosition();
+
+            if (!useSmoothMovement)
+            {
+                UpdateProbeHPosition();
+            }
+
+            UpdateProbeHMeasurement();
+
+            Debug.Log($"Датчик H: X {oldX:F1}→{probeHPosXMM:F1} мм, " +
+                     $"Z {oldZ:F1}→{probeHPosZMM:F1} мм, " +
+                     $"ΔX={moveX}, ΔZ={moveZ}");
+        }
+    }
+
+    void UpdateProbeHMeasurement()
+    {
+        if (waveguideCore == null || probeH == null) return;
+
+        Vector3 probePos = new Vector3(
+            probeHPosXMM * 0.001f,
+            0f,
+            probeHPosZMM * 0.001f
+        );
+
+        Vector3 hField = waveguideCore.GetMagneticFieldAt(probePos, Time.time);
+        float fieldStrength = hField.magnitude;
+
+        Debug.Log($"Датчик H: x={probeHPosXMM:F1}мм, " +
+                 $"z={probeHPosZMM:F1}мм, " +
+                 $"H={fieldStrength:F3} А/м");
+    }
+
+    void VisualizeFields()
+    {
+        VisualizeElectricField();
+        VisualizeMagneticField();
+    }
+
+    void VisualizeElectricField()
     {
         if (waveguideCore == null || fieldLineRenderer == null || !waveguideCore.IsPropagating())
             return;
 
-        // Визуализируем распределение поля вдоль волновода
         int points = 100;
         fieldLineRenderer.positionCount = points;
 
-        float a = waveguideCore.GetA() * 1000f; // м → мм
-        float length = pistonMaxZ; // Используем максимальную длину поршня
+        float a = waveguideCore.GetA() * 1000f;
+        float length = pistonMaxZ;
 
         for (int i = 0; i < points; i++)
         {
             float z = (i / (float)(points - 1)) * length;
-            Vector3 point = new Vector3(0, 0, z * 0.001f); // По центру волновода по x
+            Vector3 point = new Vector3(0, 0, z * 0.001f);
 
             Vector3 field = waveguideCore.GetElectricFieldAt(point, Time.time);
-
-            // Создаем точку с учетом амплитуды поля
             Vector3 fieldOffset = field.normalized * (field.magnitude * 0.01f);
             Vector3 finalPoint = point + fieldOffset;
 
             fieldLineRenderer.SetPosition(i, finalPoint);
 
-            // Динамическое изменение цвета
-            if (i % 2 == 0)
-            {
-                fieldLineRenderer.startColor = Color.Lerp(Color.red, Color.blue,
-                    Mathf.Sin(Time.time + i * 0.1f) * 0.5f + 0.5f);
-                fieldLineRenderer.endColor = Color.Lerp(Color.blue, Color.red,
-                    Mathf.Cos(Time.time + i * 0.1f) * 0.5f + 0.5f);
-            }
+            Color color = Color.Lerp(Color.red, Color.yellow,
+                Mathf.Sin(Time.time + i * 0.1f) * 0.5f + 0.5f);
+            fieldLineRenderer.startColor = color;
+            fieldLineRenderer.endColor = color;
+        }
+    }
+
+    void VisualizeMagneticField()
+    {
+        if (waveguideCore == null || magneticFieldLineRenderer == null || !waveguideCore.IsPropagating())
+            return;
+
+        int points = 80;
+        magneticFieldLineRenderer.positionCount = points;
+
+        float a = waveguideCore.GetA() * 1000f;
+        float length = pistonMaxZ;
+
+        for (int i = 0; i < points; i++)
+        {
+            float z = (i / (float)(points - 1)) * length;
+            Vector3 point = new Vector3(0.01f, 0, z * 0.001f);
+
+            Vector3 field = waveguideCore.GetMagneticFieldAt(point, Time.time);
+            Vector3 fieldOffset = field.normalized * (field.magnitude * 0.01f);
+            Vector3 finalPoint = point + fieldOffset;
+
+            magneticFieldLineRenderer.SetPosition(i, finalPoint);
+
+            Color color = Color.Lerp(Color.blue, Color.cyan,
+                Mathf.Cos(Time.time + i * 0.1f) * 0.5f + 0.5f);
+            magneticFieldLineRenderer.startColor = color;
+            magneticFieldLineRenderer.endColor = color;
         }
     }
 
@@ -293,59 +566,83 @@ public class LabSetupController : MonoBehaviour
         if (measurementText == null || waveguideCore == null)
             return;
 
-        Vector3 probePos = new Vector3(
+        Vector3 probeEPos = new Vector3(
             probeEPosXMM * 0.001f,
             0f,
             probeEPosZMM * 0.001f
         );
 
-        Vector3 eField = waveguideCore.GetElectricFieldAt(probePos, Time.time);
-        float fieldStrength = eField.magnitude;
+        Vector3 eField = waveguideCore.GetElectricFieldAt(probeEPos, Time.time);
+        float eFieldStrength = eField.magnitude;
+
+        Vector3 probeHPos = new Vector3(
+            probeHPosXMM * 0.001f,
+            0f,
+            probeHPosZMM * 0.001f
+        );
+
+        Vector3 hField = waveguideCore.GetMagneticFieldAt(probeHPos, Time.time);
+        float hFieldStrength = hField.magnitude;
 
         measurementText.text =
-            $"Датчик E:\n" +
+            $"Датчик E (штырь):\n" +
             $"Позиция: x={probeEPosXMM:F1} мм, z={probeEPosZMM:F1} мм\n" +
-            $"Напряженность: {fieldStrength:F3} В/м\n" +
-            $"Режим: {(waveguideCore.IsPropagating() ? "Распространение" : "Ниже отсечки")}\n" +
-            $"Длина волны в волноводе: {waveguideCore.GetWaveguideWavelengthMM():F2} мм";
+            $"E_y: {eFieldStrength:F3} В/м\n" +
+            $"Режим: {(waveguideCore.IsPropagating() ? "Распространение" : "Ниже отсечки")}";
 
         if (measurementSlider != null)
         {
-            measurementSlider.value = Mathf.Clamp01(fieldStrength / 10f);
+            measurementSlider.value = Mathf.Clamp01(eFieldStrength / 10f);
+        }
+
+        if (probeHMeasurementText != null)
+        {
+            probeHMeasurementText.text =
+                $"Датчик H (петля):\n" +
+                $"Позиция: x={probeHPosXMM:F1} мм, z={probeHPosZMM:F1} мм\n" +
+                $"H_x: {hField.x:F3} А/м\n" +
+                $"H_z: {hField.z:F3} А/м\n" +
+                $"|H|: {hFieldStrength:F3} А/м";
+        }
+
+        if (probeHMeasurementSlider != null)
+        {
+            probeHMeasurementSlider.value = Mathf.Clamp01(hFieldStrength / 10f);
         }
     }
 
-    // Метод для изменения размера волновода в реальном времени
     public void UpdateWaveguideSize(float widthMM, float heightMM)
     {
         if (waveguideBody != null && waveguideCore != null)
         {
-            // Обновляем пределы движения датчика
             probeMinX = -widthMM / 2f;
             probeMaxX = widthMM / 2f;
 
-            // Масштабируем 3D модель
             Vector3 scale = waveguideBody.localScale;
-            scale.x = widthMM / 1000f; // мм → м
-            scale.y = heightMM / 1000f; // мм → м
+            scale.x = widthMM / 1000f;
+            scale.y = heightMM / 1000f;
             waveguideBody.localScale = scale;
 
-            // Обновляем в ядре
             waveguideCore.SetWaveguideSize(widthMM, heightMM);
 
             Debug.Log($"Размер волновода обновлен: {widthMM}×{heightMM} мм");
         }
     }
 
-    // Метод для сброса всех позиций
     public void ResetPositions()
     {
         pistonPositionMM = pistonMinZ;
         probeEPosXMM = 0f;
-        probeEPosZMM = (probeMinZ + probeMaxZ) / 2f; // По центру
+        probeEPosZMM = (probeMinZ + probeMaxZ) / 2f;
+        probeHPosXMM = 0f;
+        probeHPosZMM = (probeMinZ + probeMaxZ) / 2f;
+
+        probeETargetPosition = CalculateProbeEPosition();
+        probeHTargetPosition = CalculateProbeHPosition();
 
         UpdatePistonPosition();
         UpdateProbeEPosition();
+        UpdateProbeHPosition();
 
         if (waveguideCore != null)
         {
@@ -355,7 +652,6 @@ public class LabSetupController : MonoBehaviour
         Debug.Log("Позиции сброшены");
     }
 
-    // Методы для вызова из UI
     public void MovePistonForward()
     {
         pistonPositionMM = Mathf.Min(pistonPositionMM + 10f, pistonMaxZ);
@@ -370,24 +666,76 @@ public class LabSetupController : MonoBehaviour
         if (waveguideCore != null) waveguideCore.SetPistonPosition(pistonPositionMM);
     }
 
-    public void SetProbePositionX(float xMM)
+    public void SetProbeEPositionX(float xMM)
     {
         probeEPosXMM = Mathf.Clamp(xMM, probeMinX, probeMaxX);
-        UpdateProbeEPosition();
+        probeETargetPosition = CalculateProbeEPosition();
+
+        if (!useSmoothMovement)
+        {
+            UpdateProbeEPosition();
+        }
     }
 
-    public void SetProbePositionZ(float zMM)
+    public void SetProbeEPositionZ(float zMM)
     {
         probeEPosZMM = Mathf.Clamp(zMM, probeMinZ, probeMaxZ);
-        UpdateProbeEPosition();
+        probeETargetPosition = CalculateProbeEPosition();
+
+        if (!useSmoothMovement)
+        {
+            UpdateProbeEPosition();
+        }
+    }
+
+    public void SetProbeHPositionX(float xMM)
+    {
+        probeHPosXMM = Mathf.Clamp(xMM, probeMinX, probeMaxX);
+        probeHTargetPosition = CalculateProbeHPosition();
+
+        if (!useSmoothMovement)
+        {
+            UpdateProbeHPosition();
+        }
+    }
+
+    public void SetProbeHPositionZ(float zMM)
+    {
+        probeHPosZMM = Mathf.Clamp(zMM, probeMinZ, probeMaxZ);
+        probeHTargetPosition = CalculateProbeHPosition();
+
+        if (!useSmoothMovement)
+        {
+            UpdateProbeHPosition();
+        }
+    }
+
+    public void ToggleWaveMode(bool isStandingWave)
+    {
+        if (waveguideCore != null)
+        {
+            waveguideCore.SetWaveMode(isStandingWave);
+            Debug.Log($"Режим волны: {(isStandingWave ? "Стоячая" : "Бегущая")}");
+        }
+    }
+
+    public void ToggleSmoothMovement()
+    {
+        useSmoothMovement = !useSmoothMovement;
+        Debug.Log($"Плавное движение: {(useSmoothMovement ? "ВКЛ" : "ВЫКЛ")}");
+    }
+
+    public void SetSmoothTime(float smoothTime)
+    {
+        probeMoveSmoothTime = Mathf.Clamp(smoothTime, 0.01f, 1f);
+        Debug.Log($"Время сглаживания: {probeMoveSmoothTime:F2} сек");
     }
 
     void OnDrawGizmosSelected()
     {
-        // Визуализация в редакторе только при выделении
         if (waveguideBody != null)
         {
-            Gizmos.color = new Color(0, 1, 1, 0.3f); // Полупрозрачный циан
+            Gizmos.color = new Color(0, 1, 1, 0.3f);
             Gizmos.DrawCube(waveguideBody.position, waveguideBody.lossyScale);
         }
 
@@ -402,12 +750,69 @@ public class LabSetupController : MonoBehaviour
             Gizmos.color = Color.red;
             Gizmos.DrawSphere(probeE.position, 0.005f);
             Gizmos.DrawLine(probeE.position, probeE.position + probeE.up * 0.02f);
+
+            if (Application.isPlaying)
+            {
+                Gizmos.color = Color.magenta;
+                Gizmos.DrawWireSphere(probeETargetPosition, 0.003f);
+                Gizmos.DrawLine(probeE.position, probeETargetPosition);
+            }
         }
 
         if (probeH != null)
         {
             Gizmos.color = Color.blue;
             Gizmos.DrawWireSphere(probeH.position, 0.008f);
+
+            Vector3 center = probeH.position;
+            float radius = 0.01f;
+            int segments = 20;
+            for (int i = 0; i < segments; i++)
+            {
+                float angle1 = i * Mathf.PI * 2 / segments;
+                float angle2 = (i + 1) * Mathf.PI * 2 / segments;
+                Vector3 point1 = center + new Vector3(Mathf.Cos(angle1) * radius, Mathf.Sin(angle1) * radius, 0);
+                Vector3 point2 = center + new Vector3(Mathf.Cos(angle2) * radius, Mathf.Sin(angle2) * radius, 0);
+                Gizmos.DrawLine(point1, point2);
+            }
+
+            if (Application.isPlaying)
+            {
+                Gizmos.color = Color.cyan;
+                Gizmos.DrawWireSphere(probeHTargetPosition, 0.003f);
+                Gizmos.DrawLine(probeH.position, probeHTargetPosition);
+            }
         }
+    }
+
+    void OnGUI()
+    {
+        if (!Application.isPlaying) return;
+
+        GUI.color = Color.white;
+        GUI.backgroundColor = new Color(0, 0, 0, 0.5f);
+
+        GUILayout.BeginArea(new Rect(10, 10, 300, 180));
+        GUILayout.BeginVertical("Box");
+
+        GUILayout.Label("=== УПРАВЛЕНИЕ ===");
+        GUILayout.Label($"Датчик E: W/A/S/D");
+        GUILayout.Label($"Датчик H: I/J/K/l");
+        GUILayout.Label($"Поршень: ↑/↓");
+
+        GUILayout.Space(10);
+
+        //if (GUILayout.Button("Переключить плавное движение"))
+        //{
+        //    ToggleSmoothMovement();
+        //}
+
+        //if (GUILayout.Button("Сбросить в центр"))
+        //{
+        //    ResetPositions();
+        //}
+
+        GUILayout.EndVertical();
+        GUILayout.EndArea();
     }
 }
